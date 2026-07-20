@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Telegram Account Management Bot
 Main entry point — initialises the bot client and registers all handlers.
