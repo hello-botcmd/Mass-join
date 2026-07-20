@@ -1,6 +1,7 @@
 import asyncio
 import re
 from telethon import events, Button
+from utils.database import get_all_accounts
 from utils.name_assigner import load_accounts, save_accounts
 from utils.telegram_client import create_client, set_online, set_offline
 from utils.stats_tracker import load_stats
@@ -58,7 +59,8 @@ async def handle_callback_query(event):
             "Add accounts via Phone+OTP+2FA or session string/file.\n\n"
             "**📋 Start Join**\n"
             "Join a private channel/group with multiple accounts.\n"
-            "Set timer gap between joins and randomly distribute online/offline status.\n\n"
+            "Set timer gap between joins and randomly distribute online/offline status.\n"
+            "Accounts get their assigned name set on Telegram automatically.\n\n"
             "**📊 Stats**\n"
             "View which accounts joined which channels, total accounts, and active count.\n\n"
             "**👁️ View Booster**\n"
@@ -66,9 +68,9 @@ async def handle_callback_query(event):
             "**❤️ Reactions**\n"
             "Add reactions to a post — Mix (random emojis) or Single (specific emoji).\n\n"
             "**💚 Health**\n"
-            "Check which accounts are working and their current status.\n\n"
+            "Check which accounts are working vs dead.\n\n"
             "**Status Overrides**\n"
-            "• 🟢 All IDs → Online: Force all accounts online\n"
+            "• 🟢 All IDs → Online: Force all accounts online (green circle)\n"
             "• 🕒 All IDs → Last Seen Recently: Force all accounts to show 'last seen recently'\n\n"
             "**Commands**\n"
             "• `/remove(chatid)` — Remove all accounts from a specific chat\n"
@@ -87,14 +89,18 @@ async def handle_callback_query(event):
 
     # ── Stats ──
     if data == "stats":
-        accounts = load_accounts()
+        accounts = get_all_accounts()
         stats_data = load_stats()
         total = len(accounts)
 
         active_count = 0
         for acc_id, acc_data in accounts.items():
+            session_string = acc_data.get("session_string", "")
             session_name = acc_data.get("session", acc_id)
-            client = await create_client(session_name, API_ID, API_HASH)
+            client = await create_client(
+                session_string if session_string else session_name,
+                API_ID, API_HASH
+            )
             try:
                 await client.connect()
                 if await client.is_user_authorized():
@@ -147,95 +153,139 @@ async def handle_callback_query(event):
 
     # ── Health ──
     if data == "health":
-        accounts = load_accounts()
+        accounts = get_all_accounts()
         if not accounts:
             await event.edit("❌ No accounts found.", buttons=[[Button.inline("🔙 Back", b"back_main")]])
             return
 
-        await event.edit("🔄 Checking account health...")
+        await event.edit("🔄 Checking account health...\n\nTesting each account session...")
 
+        working = 0
+        dead = 0
         results = []
+
         for acc_id, acc_data in accounts.items():
+            session_string = acc_data.get("session_string", "")
             session_name = acc_data.get("session", acc_id)
             name = acc_data.get("name", acc_id)
-            client = await create_client(session_name, API_ID, API_HASH)
-            status_icon = "❌"
-            status_text = "disconnected"
+
+            client = await create_client(
+                session_string if session_string else session_name,
+                API_ID, API_HASH
+            )
+
             try:
                 await client.connect()
                 if await client.is_user_authorized():
                     me = await client.get_me()
-                    status_icon = "✅"
-                    status_text = f"online (ID: {me.id})"
+                    working += 1
+                    results.append(f"✅ **{name}** — Working (ID: {me.id})")
                 else:
-                    status_icon = "⚠️"
-                    status_text = "not authorized"
+                    dead += 1
+                    results.append(f"❌ **{name}** — Dead (not authorized)")
             except Exception as e:
-                status_icon = "❌"
-                status_text = f"error: {str(e)[:30]}"
+                dead += 1
+                results.append(f"❌ **{name}** — Dead ({str(e)[:30]})")
             finally:
                 await client.disconnect()
-            results.append(f"{status_icon} **{name}** — {status_text}")
 
-        text = "💚 **Health Report**\n\n" + "\n".join(results)
+        text = (
+            f"💚 **Health Report**\n\n"
+            f"**Working:** {working}\n"
+            f"**Dead:** {dead}\n"
+            f"**Total:** {len(accounts)}\n\n" +
+            "\n".join(results)
+        )
+
+        if len(text) > 4000:
+            text = text[:4000] + "\n\n... (truncated)"
+
         await event.edit(text, buttons=[[Button.inline("🔙 Back", b"back_main")]])
         return
 
     # ── Status Overrides ──
     if data == "all_online":
-        accounts = load_accounts()
+        accounts = get_all_accounts()
         if not accounts:
             await event.answer("❌ No accounts.", alert=True)
             return
-        await event.edit("🟢 Setting all accounts to **Online**...")
+
+        await event.edit("🟢 Setting all accounts to **Online**...\n\nThis may take a moment...")
+
         success = 0
         fail = 0
         for acc_id, acc_data in accounts.items():
+            session_string = acc_data.get("session_string", "")
             session_name = acc_data.get("session", acc_id)
-            client = await create_client(session_name, API_ID, API_HASH)
+            name = acc_data.get("name", acc_id)
+
+            client = await create_client(
+                session_string if session_string else session_name,
+                API_ID, API_HASH
+            )
             try:
                 await client.connect()
                 if await client.is_user_authorized():
-                    await set_online(client)
-                    success += 1
+                    result = await set_online(client)
+                    if result:
+                        success += 1
+                    else:
+                        fail += 1
                 else:
                     fail += 1
             except Exception:
                 fail += 1
             finally:
                 await client.disconnect()
+
         await event.edit(
             f"🟢 **All → Online** complete!\n"
-            f"Online: {success} | Failed/skipped: {fail}",
+            f"✅ Online: {success}\n"
+            f"❌ Failed: {fail}\n"
+            f"Total: {success + fail}",
             buttons=[[Button.inline("🔙 Back", b"back_main")]]
         )
         return
 
     if data == "all_last_seen":
-        accounts = load_accounts()
+        accounts = get_all_accounts()
         if not accounts:
             await event.answer("❌ No accounts.", alert=True)
             return
-        await event.edit("🕒 Setting all accounts to **Last Seen Recently**...")
+
+        await event.edit("🕒 Setting all accounts to **Last Seen Recently**...\n\nThis may take a moment...")
+
         success = 0
         fail = 0
         for acc_id, acc_data in accounts.items():
+            session_string = acc_data.get("session_string", "")
             session_name = acc_data.get("session", acc_id)
-            client = await create_client(session_name, API_ID, API_HASH)
+            name = acc_data.get("name", acc_id)
+
+            client = await create_client(
+                session_string if session_string else session_name,
+                API_ID, API_HASH
+            )
             try:
                 await client.connect()
                 if await client.is_user_authorized():
-                    await set_offline(client)
-                    success += 1
+                    result = await set_offline(client)
+                    if result:
+                        success += 1
+                    else:
+                        fail += 1
                 else:
                     fail += 1
             except Exception:
                 fail += 1
             finally:
                 await client.disconnect()
+
         await event.edit(
             f"🕒 **All → Last Seen Recently** complete!\n"
-            f"Updated: {success} | Failed/skipped: {fail}",
+            f"✅ Updated: {success}\n"
+            f"❌ Failed: {fail}\n"
+            f"Total: {success + fail}",
             buttons=[[Button.inline("🔙 Back", b"back_main")]]
         )
         return
