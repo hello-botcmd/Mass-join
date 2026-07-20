@@ -1,30 +1,30 @@
-import os
-import json
-
-STATS_FILE = "data/stats.json"
+from utils.database import (
+    get_all_stats, get_account_stats, add_chat_to_account,
+    remove_chat_from_all_accounts, remove_chat_from_account
+)
 
 
 def load_stats() -> dict:
-    if not os.path.exists(STATS_FILE):
-        return {}
-    with open(STATS_FILE, "r") as f:
-        return json.load(f)
+    """Returns {account_id: [list_of_chat_identifiers]}"""
+    return get_all_stats()
 
 
 def save_stats(stats: dict):
-    with open(STATS_FILE, "w") as f:
-        json.dump(stats, f, indent=2)
+    """
+    Save full stats dict.
+    Since we use per-account operations, this mainly exists as a compatibility
+    wrapper. For bulk operations, we iterate.
+    """
+    for acc_id, chats in stats.items():
+        for chat in chats:
+            add_chat_to_account(acc_id, chat)
 
 
-def record_join(account_id: str, chat_id: int):
-    stats = load_stats()
-    if account_id not in stats:
-        stats[account_id] = []
-    if chat_id not in stats[account_id]:
-        stats[account_id].append(chat_id)
-    save_stats(stats)
+def record_join(account_id: str, chat_identifier: str):
+    """Record that an account joined a chat."""
+    add_chat_to_account(account_id, chat_identifier)
 
 
 def get_joined_chats(account_id: str) -> list:
-    stats = load_stats()
-    return stats.get(account_id, [])
+    """Get all chats a specific account has joined."""
+    return get_account_stats(account_id)
