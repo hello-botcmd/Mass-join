@@ -2,15 +2,15 @@ import asyncio
 import random
 import re
 from utils.telegram_client import create_client, send_reaction
-from utils.name_assigner import load_accounts
+from utils.database import get_all_accounts, get_session_string
+from config import API_ID, API_HASH
 
 MIX_EMOJIS = ["👍", "❤️", "🔥", "🎉", "😁", "🤩", "👏", "💯", "🎊", "✨"]
 SINGLE_EMOJI = "👍"
-REACTION_GAP = 3  # same as view gap
+REACTION_GAP = 3
 
 
 def parse_post_link(link: str):
-    """Same as in view_booster.py"""
     link = link.strip()
     pattern = r"(?:https?://)?t\.me/(?:c/)?([^/\s?]+)/(\d+)"
     match = re.search(pattern, link)
@@ -26,11 +26,7 @@ def parse_post_link(link: str):
 
 async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
                         single_emoji: str = None, progress_callback=None):
-    """
-    Add reactions to a post.
-    mode: "mix" for random emoji per account, "single" for one fixed emoji.
-    """
-    accounts = load_accounts()
+    accounts = get_all_accounts()
     if not accounts:
         raise Exception("No accounts available.")
 
@@ -40,8 +36,14 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
 
     for account_id, account_data in accounts.items():
         idx += 1
+        session_string = account_data.get("session_string", "")
         session_name = account_data.get("session", account_id)
-        client = await create_client(session_name, api_id, api_hash)
+
+        client = await create_client(
+            session_string if session_string else session_name,
+            api_id, api_hash
+        )
+
         try:
             await client.connect()
             if not await client.is_user_authorized():
@@ -51,7 +53,6 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
                 await client.disconnect()
                 continue
 
-            # Resolve entity
             try:
                 if channel_identifier.startswith("-100"):
                     entity = await client.get_entity(int(channel_identifier))
@@ -60,7 +61,6 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
             except Exception:
                 entity = await client.get_entity(int(channel_identifier))
 
-            # Pick emoji
             if mode == "mix":
                 emoji = random.choice(MIX_EMOJIS)
             else:
