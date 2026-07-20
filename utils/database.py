@@ -9,19 +9,16 @@ _db = None
 
 
 def get_db():
-    """Get the MongoDB database instance, creating connection if needed."""
     global _client, _db
     if _db is None:
         _client = MongoClient(MONGO_URI)
         _db = _client[MONGO_DB_NAME]
-        # Ensure indexes
         _db.accounts.create_index("account_id", unique=True)
         _db.name_assignments.create_index("name", unique=True)
     return _db
 
 
 def close_db():
-    """Close the MongoDB connection."""
     global _client, _db
     if _client:
         _client.close()
@@ -32,15 +29,12 @@ def close_db():
 # ── Accounts Collection ──
 
 def get_all_accounts() -> dict:
-    """
-    Returns a dict in the same format as the old accounts.json:
-    {account_id: {name, phone, session, session_string, status}}
-    """
     db = get_db()
     accounts = {}
     for doc in db.accounts.find():
         acc_id = doc.pop("account_id")
         accounts[acc_id] = doc
+        doc.pop("_id", None)
     return accounts
 
 
@@ -55,7 +49,6 @@ def get_account(account_id: str) -> dict:
 
 
 def save_account(account_id: str, data: dict):
-    """Insert or replace an account document."""
     db = get_db()
     doc = data.copy()
     doc["account_id"] = account_id
@@ -70,6 +63,24 @@ def delete_account(account_id: str):
 def get_accounts_count() -> int:
     db = get_db()
     return db.accounts.count_documents({})
+
+
+def get_session_string(account_id: str) -> str:
+    """Get the stored session string for an account."""
+    db = get_db()
+    doc = db.accounts.find_one({"account_id": account_id})
+    if doc:
+        return doc.get("session_string", "")
+    return ""
+
+
+def update_account_field(account_id: str, field: str, value):
+    """Update a single field on an account document."""
+    db = get_db()
+    db.accounts.update_one(
+        {"account_id": account_id},
+        {"$set": {field: value}}
+    )
 
 
 # ── Name Assignments ──
@@ -97,9 +108,6 @@ def get_all_used_names() -> set:
 # ── Stats Collection ──
 
 def get_all_stats() -> dict:
-    """
-    Returns: {account_id: [list_of_chat_identifiers]}
-    """
     db = get_db()
     stats = {}
     for doc in db.stats.find():
