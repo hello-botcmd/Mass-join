@@ -1,6 +1,5 @@
 import os
 import json
-import base64
 from telethon import TelegramClient, events, Button
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
@@ -9,6 +8,16 @@ from config import SESSION_DIR, API_ID, API_HASH
 
 # Temporary storage for login flows
 _login_flows = {}
+
+
+async def handle_add_account_command(event):
+    """Handle /add_account command — delegates to the button menu."""
+    from keyboards.main_keyboard import get_add_account_keyboard
+    await event.reply(
+        "➕ **Add Account**\n\n"
+        "Choose how you want to add an account:",
+        buttons=get_add_account_keyboard()
+    )
 
 
 async def handle_add_account_menu(event):
@@ -232,9 +241,7 @@ async def handle_session_string_input(event):
     user_id = event.sender_id
     session_string = event.message.text.strip()
 
-    # Validate it looks like a base64 Telethon session string
     try:
-        # Try to create a temporary client with the string session
         client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
         await client.connect()
 
@@ -249,12 +256,9 @@ async def handle_session_string_input(event):
 
         # Save the string session to a file for persistence
         session_file_name = f"string_{account_id}"
-        saved_session_string = client.session.save()  # save() returns the string
+        saved_session_string = client.session.save()
         session_file_path = os.path.join(SESSION_DIR, session_file_name + ".session")
 
-        # Write the string session to the .session file location
-        # Telethon can load from StringSession directly, but we need persistent storage.
-        # We'll store the string in accounts.json and use StringSession on reconnect.
         accounts = load_accounts()
         accounts[account_id] = {
             "name": name,
@@ -265,7 +269,6 @@ async def handle_session_string_input(event):
         }
         save_accounts(accounts)
 
-        # Also write the string to a file in sessions dir so it survives restarts
         with open(session_file_path, "w") as f:
             f.write(saved_session_string)
 
