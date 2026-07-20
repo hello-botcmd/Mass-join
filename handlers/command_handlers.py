@@ -28,37 +28,23 @@ async def handle_start(event):
     )
 
 
-async def handle_help(event):
-    """Send help message."""
+async def handle_start(event):
+    """Welcome message with main menu."""
     if not is_authorized(event.sender_id):
-        await event.reply("⛔ You are not authorised.")
+        await event.reply("⛔ You are not authorised to use this bot.")
         return
 
-    help_text = (
-        "❓ **Help — Bot Features**\n\n"
-        "**📋 Start Join**\n"
-        "Join a private channel/group with multiple accounts.\n"
-        "You can set a timer gap between joins and randomly distribute online/offline status.\n\n"
-        "**📊 Stats**\n"
-        "View which accounts joined which channels, total accounts, and active count.\n\n"
-        "**👁️ View Booster**\n"
-        "Increase view count on a post using all accounts (3s fixed gap).\n\n"
-        "**❤️ Reactions**\n"
-        "Add reactions to a post — Mix (random emojis) or Single (specific emoji).\n\n"
-        "**💚 Health**\n"
-        "Check which accounts are working and their current status.\n\n"
-        "**Status Overrides**\n"
-        "• 🟢 All IDs → Online: Force all accounts online\n"
-        "• 🕒 All IDs → Last Seen Recently: Force all accounts to show 'last seen recently'\n\n"
-        "**Commands**\n"
-        "• `/add_account` — Add a new Telegram account\n"
-        "• `/remove(chatid)` — Remove all accounts from a specific chat\n"
-        "• `/start` — Show main menu\n\n"
-        "**name.txt**\n"
-        "Edit `data/name.txt` with one name per line.\n"
-        "The bot auto-assigns the next unused name when adding accounts."
+    await event.reply(
+        "🤖 **Telegram Account Manager Bot**\n\n"
+        "Welcome! I manage multiple Telegram accounts.\n"
+        "Use the buttons below or type commands.\n\n"
+        "📌 **Quick Start**\n"
+        "1. Click **➕ Add Account** to add your first account\n"
+        "2. Edit `data/name.txt` with names\n"
+        "3. Use **📋 Start Join** to join a channel\n"
+        "4. Use **👁️ View Booster** or **❤️ Reactions** on posts\n",
+        buttons=get_main_keyboard()
     )
-    await event.reply(help_text, buttons=get_main_keyboard())
 
 
 async def handle_remove(event):
