@@ -1,6 +1,4 @@
-    # bot.py — corrected main entry point
-
-#!/usr/bin/env python3
+                 #!/usr/bin/env python3
 """
 Telegram Account Management Bot
 Main entry point — initialises the bot client and registers all handlers.
@@ -24,6 +22,7 @@ from handlers.account_handlers import (
     handle_code_input,
     handle_2fa_input,
     handle_session_file_upload,
+    handle_session_string_input,
 )
 from handlers.join_handlers import (
     handle_join_link,
@@ -47,7 +46,7 @@ def is_authorized(user_id: int) -> bool:
 async def main():
     logger.info("Starting Telegram Account Manager Bot...")
 
-    # ═══ FIX #1: await .start() ═══
+    # Await .start() — critical fix
     bot = await TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
     logger.info(f"Bot started! Owner: {OWNER_ID}")
 
@@ -65,17 +64,14 @@ async def main():
     async def remove_handler(event):
         await handle_remove(event)
 
-    @bot.on(events.NewMessage(pattern=r"^/add_account"))
+    @bot.on(events.NewMessage(pattern=r"^/add_account$"))
     async def add_account_handler(event):
         if not is_authorized(event.sender_id):
             await event.reply("⛔ You are not authorised.")
             return
         await handle_add_account_command(event)
 
-    # ── Dynamic-flow message handlers ──
-    # Instead of filtering by flow state in the decorator (which causes import
-    # order issues), we'll use a single catch-all handler that dispatches
-    # based on stored flow state. This is much cleaner.
+    # ── Dynamic message dispatcher ──
 
     @bot.on(events.NewMessage)
     async def message_dispatcher(event):
@@ -83,7 +79,6 @@ async def main():
         if not is_authorized(event.sender_id):
             return
         if not event.message.text:
-            # Might be a file upload — handled separately
             return
 
         uid = event.sender_id
@@ -102,6 +97,9 @@ async def main():
             elif step == "awaiting_2fa":
                 await handle_2fa_input(event)
                 return
+            elif step == "awaiting_session":
+                await handle_session_string_input(event)
+                return
 
         # ── Join flows ──
         from handlers.join_handlers import _join_flows
@@ -110,9 +108,6 @@ async def main():
             if step == "awaiting_link":
                 await handle_join_link(event)
                 return
-            elif step == "awaiting_timer":
-                # Timer selection comes via callback, not text
-                pass
             elif step == "awaiting_online_count":
                 await handle_online_count(event)
                 return
@@ -163,7 +158,7 @@ async def main():
             )
             return
 
-    # ── File upload handler ──
+    # ── File upload handler (.session files) ──
     @bot.on(events.NewMessage(func=lambda e: e.message.file and e.message.file.name and e.message.file.name.endswith(".session")))
     async def session_file_handler(event):
         if not is_authorized(event.sender_id):
@@ -186,4 +181,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error(f"Fatal error: {e}", exc_info=True)       
