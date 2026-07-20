@@ -1,7 +1,9 @@
 import os
 import json
-from telethon import TelegramClient, events
+import base64
+from telethon import TelegramClient, events, Button
 from telethon.errors import SessionPasswordNeededError
+from telethon.sessions import StringSession
 from utils.name_assigner import load_accounts, save_accounts, get_next_name
 from config import SESSION_DIR, API_ID, API_HASH
 
@@ -9,21 +11,41 @@ from config import SESSION_DIR, API_ID, API_HASH
 _login_flows = {}
 
 
-async def handle_add_account_command(event):
-    """Handler for /add_account command."""
-    user_id = event.sender_id
-    if user_id not in _login_flows:
-        _login_flows[user_id] = {}
-
-    await event.reply(
-        "📱 **Add Account**\n\n"
-        "Send me the phone number (international format, e.g., +1234567890)\n"
-        "Or upload a `.session` file if you already have one.",
-        buttons=[
-            [Button.inline("📤 Upload .session file", b"upload_session")]
-        ]
+async def handle_add_account_menu(event):
+    """Show the add-account sub-menu with two options."""
+    from keyboards.main_keyboard import get_add_account_keyboard
+    await event.edit(
+        "➕ **Add Account**\n\n"
+        "Choose how you want to add an account:",
+        buttons=get_add_account_keyboard()
     )
-    _login_flows[user_id]["step"] = "awaiting_phone"
+
+
+async def handle_add_by_phone(event):
+    """Start the phone-based login flow."""
+    user_id = event.sender_id
+    _login_flows[user_id] = {"step": "awaiting_phone"}
+    await event.edit(
+        "📱 **Add by Phone**\n\n"
+        "Send me the phone number in international format.\n"
+        "Example: `+1234567890`\n\n"
+        "I'll send an OTP code and ask for your 2FA password if needed.",
+        buttons=[[Button.inline("🔙 Cancel", b"cancel_login")]]
+    )
+
+
+async def handle_add_by_session(event):
+    """Show the session string/file sub-menu."""
+    user_id = event.sender_id
+    _login_flows[user_id] = {"step": "awaiting_session"}
+    await event.edit(
+        "🔑 **Add by Session**\n\n"
+        "You can either:\n\n"
+        "1. **Upload a `.session` file** — send the file directly\n"
+        "2. **Paste a session string** — copy & paste the base64 string\n\n"
+        "Send the file or paste the string now.",
+        buttons=[[Button.inline("🔙 Cancel", b"cancel_login")]]
+    )
 
 
 async def handle_phone_input(event):
@@ -31,14 +53,12 @@ async def handle_phone_input(event):
     user_id = event.sender_id
     phone = event.message.text.strip()
 
-    # Create a temporary client for this login
     session_name = f"temp_{user_id}_{phone.replace('+', '')}"
     client = TelegramClient(os.path.join(SESSION_DIR, session_name), API_ID, API_HASH)
     await client.connect()
 
     try:
         if await client.is_user_authorized():
-            # Already authorized — save as a new account
             me = await client.get_me()
             account_id = str(me.id)
             name = get_next_name()
@@ -52,14 +72,17 @@ async def handle_phone_input(event):
             save_accounts(accounts)
             await event.reply(f"✅ Account **{name}** (ID: `{account_id}`) already had an active session and has been added!")
             await client.disconnect()
+            if user_id in _login_flows:
+                del _login_flows[user_id]
             return
 
-        # Send code request
         await client.send_code_request(phone)
-        _login_flows[user_id]["phone"] = phone
-        _login_flows[user_id]["session_name"] = session_name
-        _login_flows[user_id]["client"] = client
-        _login_flows[user_id]["step"] = "awaiting_code"
+        _login_flows[user_id].update({
+            "phone": phone,
+            "session_name": session_name,
+            "client": client,
+            "step": "awaiting_code"
+        })
 
         await event.reply(
             f"📱 Code sent to `{phone}`\n\n"
@@ -89,12 +112,11 @@ async def handle_code_input(event):
     session_name = flow.get("session_name")
 
     if not client:
-        await event.reply("❌ Session expired. Please start over with /add_account.")
+        await event.reply("❌ Session expired. Please start again.")
         return
 
     try:
         await client.sign_in(phone, code)
-        # Success — no 2FA needed
         me = await client.get_me()
         account_id = str(me.id)
         name = get_next_name()
@@ -110,14 +132,13 @@ async def handle_code_input(event):
         del _login_flows[user_id]
 
     except SessionPasswordNeededError:
-        # 2FA required
         _login_flows[user_id]["step"] = "awaiting_2fa"
         await event.reply("🔐 **2FA Required**\n\nPlease send your 2FA password.")
         return
     except Exception as e:
         await event.reply(f"❌ Error: {str(e)}")
         if "code" in str(e).lower() or "invalid" in str(e).lower():
-            await event.reply("Try again with the correct code, or use /add_account to restart.")
+            await event.reply("Try again with the correct code, or restart with the button.")
         else:
             del _login_flows[user_id]
             await client.disconnect()
@@ -159,12 +180,9 @@ async def handle_2fa_input(event):
 
 
 async def handle_session_file_upload(event):
-    """
-    Handle .session file upload.
-    The bot receives the file, saves it to SESSION_DIR,
-    then tries to connect and register the account.
-    """
+    """Handle .session file upload."""
     user_id = event.sender_id
+
     if not event.message.file or not event.message.file.name:
         await event.reply("❌ Please upload a `.session` file.")
         return
@@ -173,12 +191,10 @@ async def handle_session_file_upload(event):
         await event.reply("❌ File must have `.session` extension.")
         return
 
-    # Download the file
     file_name = event.message.file.name
     destination = os.path.join(SESSION_DIR, file_name)
     await event.message.download_media(destination)
 
-    # Try to connect with the session
     client = TelegramClient(destination, API_ID, API_HASH)
     try:
         await client.connect()
@@ -204,3 +220,60 @@ async def handle_session_file_upload(event):
             os.remove(destination)
     finally:
         await client.disconnect()
+        if user_id in _login_flows:
+            del _login_flows[user_id]
+
+
+async def handle_session_string_input(event):
+    """
+    Handle a base64 session string pasted by the user.
+    Saves it as a .session file and registers the account.
+    """
+    user_id = event.sender_id
+    session_string = event.message.text.strip()
+
+    # Validate it looks like a base64 Telethon session string
+    try:
+        # Try to create a temporary client with the string session
+        client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            await event.reply("❌ The session string is not authorized (invalid or expired).")
+            await client.disconnect()
+            return
+
+        me = await client.get_me()
+        account_id = str(me.id)
+        name = get_next_name()
+
+        # Save the string session to a file for persistence
+        session_file_name = f"string_{account_id}"
+        saved_session_string = client.session.save()  # save() returns the string
+        session_file_path = os.path.join(SESSION_DIR, session_file_name + ".session")
+
+        # Write the string session to the .session file location
+        # Telethon can load from StringSession directly, but we need persistent storage.
+        # We'll store the string in accounts.json and use StringSession on reconnect.
+        accounts = load_accounts()
+        accounts[account_id] = {
+            "name": name,
+            "phone": getattr(me, "phone", "unknown"),
+            "session": session_file_name,
+            "session_string": saved_session_string,
+            "status": "active"
+        }
+        save_accounts(accounts)
+
+        # Also write the string to a file in sessions dir so it survives restarts
+        with open(session_file_path, "w") as f:
+            f.write(saved_session_string)
+
+        await event.reply(f"✅ Account **{name}** (ID: `{account_id}`) added from session string!")
+
+    except Exception as e:
+        await event.reply(f"❌ Invalid session string: {str(e)}")
+    finally:
+        await client.disconnect()
+        if user_id in _login_flows:
+            del _login_flows[user_id]
