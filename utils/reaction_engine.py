@@ -1,7 +1,7 @@
 import asyncio
 import random
 import re
-from utils.telegram_client import create_client, send_reaction
+from utils.telegram_client import create_client, send_reaction, resolve_channel_entity
 from utils.database import get_all_accounts, get_session_string
 from config import API_ID, API_HASH
 
@@ -38,6 +38,7 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
         idx += 1
         session_string = account_data.get("session_string", "")
         session_name = account_data.get("session", account_id)
+        account_name = account_data.get("name", account_id)
 
         client = await create_client(
             session_string if session_string else session_name,
@@ -49,17 +50,18 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
             if not await client.is_user_authorized():
                 results["failed"] += 1
                 if progress_callback:
-                    await progress_callback(idx, len(accounts), f"{account_data.get('name', account_id)} — not authorized")
+                    await progress_callback(idx, len(accounts), f"{account_name} — not authorized")
                 await client.disconnect()
                 continue
 
-            try:
-                if channel_identifier.startswith("-100"):
-                    entity = await client.get_entity(int(channel_identifier))
-                else:
-                    entity = await client.get_entity(channel_identifier)
-            except Exception:
-                entity = await client.get_entity(int(channel_identifier))
+            # Resolve channel entity using robust method
+            entity = await resolve_channel_entity(client, channel_identifier)
+            if entity is None:
+                results["failed"] += 1
+                if progress_callback:
+                    await progress_callback(idx, len(accounts), f"{account_name} — channel not found (not joined?)")
+                await client.disconnect()
+                continue
 
             if mode == "mix":
                 emoji = random.choice(MIX_EMOJIS)
@@ -74,12 +76,12 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
 
             if progress_callback:
                 status = f"✓ {emoji}" if success else "✗"
-                await progress_callback(idx, len(accounts), f"{account_data.get('name', account_id)} {status}")
+                await progress_callback(idx, len(accounts), f"{account_name} {status}")
 
         except Exception as e:
             results["failed"] += 1
             if progress_callback:
-                await progress_callback(idx, len(accounts), f"{account_data.get('name', account_id)} ✗")
+                await progress_callback(idx, len(accounts), f"{account_name} ✗ {str(e)[:30]}")
         finally:
             await client.disconnect()
 
