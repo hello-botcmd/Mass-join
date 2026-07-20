@@ -1,7 +1,10 @@
-import asyncio
+     import asyncio
 import random
 from telethon import events, Button
-from utils.telegram_client import create_client, join_private_channel, set_online, set_offline, change_account_name, get_session_string
+from utils.telegram_client import (
+    create_client, join_private_channel, set_online, set_offline,
+    set_last_seen_recently, change_account_name, get_session_string
+)
 from utils.database import get_all_accounts, save_account, get_session_string as get_db_session
 from utils.stats_tracker import record_join
 from utils.status_manager import random_distribution, apply_status
@@ -11,7 +14,6 @@ _join_flows = {}
 
 
 async def handle_start_join(event):
-    """Start the join flow — ask for invite link."""
     user_id = event.sender_id
     accounts = get_all_accounts()
     if not accounts:
@@ -35,10 +37,8 @@ async def handle_start_join(event):
 
 
 async def handle_join_link(event):
-    """Receive the invite link, ask for timer gap."""
     user_id = event.sender_id
     link = event.message.text.strip()
-
     if user_id not in _join_flows:
         return
 
@@ -54,16 +54,10 @@ async def handle_join_link(event):
 
 
 async def handle_timer_selection(event):
-    """Receive timer gap selection, ask for status distribution counts."""
     user_id = event.sender_id
     data = event.data.decode()
 
-    gap_map = {
-        "timer_1": 1,
-        "timer_2": 2,
-        "timer_5": 5,
-        "timer_10": 10,
-    }
+    gap_map = {"timer_1": 1, "timer_2": 2, "timer_5": 5, "timer_10": 10}
     gap = gap_map.get(data, 2)
 
     if user_id not in _join_flows:
@@ -85,7 +79,6 @@ async def handle_timer_selection(event):
 
 
 async def handle_online_count(event):
-    """Receive online count, ask for offline_2min count."""
     user_id = event.sender_id
     text = event.message.text.strip()
 
@@ -116,7 +109,6 @@ async def handle_online_count(event):
 
 
 async def handle_offline_2min_count(event):
-    """Receive offline_2min count, ask for last_seen count."""
     user_id = event.sender_id
     text = event.message.text.strip()
 
@@ -143,14 +135,13 @@ async def handle_offline_2min_count(event):
     remaining2 = remaining - count
     await event.reply(
         f"✅ **{count}** accounts will go offline after 2 minutes.\n\n"
-        f"**How many should show 'last seen recently'?**\n"
+        f"**How many should hide their last seen (show 'last seen recently')?**\n"
         f"Send a number (remaining: {remaining2})",
         buttons=[[Button.inline("🔙 Cancel", b"cancel_join")]]
     )
 
 
 async def handle_last_seen_count(event):
-    """Receive last_seen count, then begin the join process."""
     user_id = event.sender_id
     text = event.message.text.strip()
 
@@ -173,6 +164,7 @@ async def handle_last_seen_count(event):
     flow = _join_flows[user_id]
     flow["last_seen_count"] = count
 
+    # Randomly assign statuses
     status_map = random_distribution(
         flow["account_ids"],
         flow["online_count"],
@@ -188,7 +180,7 @@ async def handle_last_seen_count(event):
         f"Channel: `{link}`\n"
         f"Accounts: {total}\n"
         f"Gap: {gap}s\n"
-        f"Online: {flow['online_count']} | Offline 2min: {flow['offline_2min_count']} | Last seen: {flow['last_seen_count']}\n\n"
+        f"Online: {flow['online_count']} | Offline 2min: {flow['offline_2min_count']} | Last seen hidden: {flow['last_seen_count']}\n\n"
         f"🔄 Starting..."
     )
 
@@ -202,7 +194,6 @@ async def handle_last_seen_count(event):
         account_data = flow["accounts"].get(account_id, {})
         account_name = account_data.get("name", account_id)
 
-        # Get session string from DB (accounts may have been updated)
         session_string = get_db_session(account_id)
         session_name = account_data.get("session", account_id)
 
@@ -223,46 +214,66 @@ async def handle_last_seen_count(event):
                 await client.disconnect()
                 continue
 
-            # ── STEP 1: Change the account's display name on Telegram ──
+            # STEP 1: Change the account's display name on Telegram
             name_changed = await change_account_name(client, account_name)
-            if name_changed:
-                name_status = "name set ✓"
-            else:
-                name_status = "name failed"
 
-            # ── STEP 2: Join the channel ──
+            # STEP 2: Join the channel
             joined = await join_private_channel(client, link)
 
             if joined:
                 success_count += 1
                 record_join(account_id, link)
 
-                # Save the session string after a successful join for future use
+                # Save session string for future use
                 try:
                     ss = await get_session_string(client)
                     save_account(account_id, {**account_data, "session_string": ss})
                 except Exception:
                     pass
 
-                # Apply status
-                status = status_map.get(account_id, "last_seen_recently")
-                await apply_status(client, status)
+                # STEP 3: Apply status based on assignment
+                assigned_status = status_map.get(account_id, "last_seen_recently")
+
+                if assigned_status == "online":
+                    # Set online immediately
+                    await set_online(client)
+                    status_text = "online ✓"
+
+                elif assigned_status == "offline_2min":
+                    # ═══ FIX: Keep online initially, schedule offline after 2 minutes ═══
+                    # Set online first
+                    await set_online(client)
+                    status_text = "online now → offline in 2min ✓"
+                    # Schedule going offline + hiding last seen after 2 minutes
+                    session_string_saved = get_db_session(account_id)
+                    asyncio.create_task(
+                        _delayed_set_offline(
+                            account_id, account_data, account_name, 120
+                        )
+                    )
+
+                elif assigned_status == "last_seen_recently":
+                    # Hide last seen using privacy settings
+                    await set_last_seen_recently(client)
+                    status_text = "last seen hidden ✓"
+
+                else:
+                    # Default: hide last seen
+                    await set_last_seen_recently(client)
+                    status_text = "last seen hidden ✓"
+
             else:
                 fail_count += 1
+                status_text = "join failed ✗"
+
+            name_status = "name set ✓" if name_changed else ""
+            status_detail = f"{status_text}{' | ' + name_status if name_status else ''}"
 
             await progress_msg.edit(
                 f"🚀 Joining... **{i+1}/{total}**\n"
                 f"✅ Success: {success_count} | ❌ Failed: {fail_count}\n"
-                f"➡️ {account_name} — {'✓ joined, ' + name_status if joined else '✗ failed'}"
+                f"➡️ {account_name} — {status_detail}"
             )
-
-            # Handle offline_2min: schedule going offline after 2 minutes
-            if joined and status_map.get(account_id) == "offline_2min":
-                asyncio.create_task(
-                    _delayed_set_offline(
-                        account_id, account_data, account_name, 120
-                    )
-                )
 
         except Exception as e:
             fail_count += 1
@@ -274,6 +285,7 @@ async def handle_last_seen_count(event):
         finally:
             await client.disconnect()
 
+        # Timer gap between joins
         if i < total - 1:
             await asyncio.sleep(gap)
 
@@ -288,8 +300,12 @@ async def handle_last_seen_count(event):
 
 
 async def _delayed_set_offline(account_id: str, account_data: dict, account_name: str, delay: int):
-    """Set an account offline after a delay."""
+    """
+    After `delay` seconds, set the account offline and hide last seen.
+    Uses the saved session string from DB for reliability.
+    """
     await asyncio.sleep(delay)
+
     session_string = get_db_session(account_id)
     session_name = account_data.get("session", account_id)
 
@@ -300,7 +316,9 @@ async def _delayed_set_offline(account_id: str, account_data: dict, account_name
     try:
         await client.connect()
         if await client.is_user_authorized():
-            await set_offline(client)
+            # Hide last seen (privacy) + set offline
+            from utils.telegram_client import set_last_seen_recently
+            await set_last_seen_recently(client)
     except Exception:
         pass
     finally:
