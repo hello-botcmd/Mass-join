@@ -1,184 +1,131 @@
-
-"""
-Telegram Account Management Bot
-Main entry point — initialises the bot client and registers all handlers.
-"""
-
-import os
-import sys
-import asyncio
-import logging
-from telethon import TelegramClient, events, Button
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID, SUDO_USERS
+import re
+from telethon import events, Button
 from keyboards.main_keyboard import get_main_keyboard
-from handlers.command_handlers import handle_start, handle_help, handle_remove
-from handlers.callback_handlers import handle_callback_query
-from handlers.account_handlers import (
-    handle_add_account_command,
-    handle_phone_input,
-    handle_code_input,
-    handle_2fa_input,
-    handle_session_file_upload,
-    handle_session_string_input,
-)
-from handlers.join_handlers import (
-    handle_join_link,
-    handle_online_count,
-    handle_offline_2min_count,
-    handle_last_seen_count,
-)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger("AccountBot")
+from utils.name_assigner import load_accounts, save_accounts
+from utils.stats_tracker import load_stats, save_stats
+from config import OWNER_ID, SUDO_USERS
 
 
 def is_authorized(user_id: int) -> bool:
     return user_id == OWNER_ID or user_id in SUDO_USERS
 
 
-async def main():
-    logger.info("Starting Telegram Account Manager Bot...")
+async def handle_start(event):
+    """Welcome message with main menu."""
+    if not is_authorized(event.sender_id):
+        await event.reply("⛔ You are not authorised to use this bot.")
+        return
 
-    # Await .start() — critical fix
-    bot = await TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-    logger.info(f"Bot started! Owner: {OWNER_ID}")
-
-    # ── Command Handlers ──
-
-    @bot.on(events.NewMessage(pattern=r"^/start$"))
-    async def start_handler(event):
-        await handle_start(event)
-
-    @bot.on(events.NewMessage(pattern=r"^/help$"))
-    async def help_handler(event):
-        await handle_help(event)
-
-    @bot.on(events.NewMessage(pattern=r"^/remove"))
-    async def remove_handler(event):
-        await handle_remove(event)
-
-    @bot.on(events.NewMessage(pattern=r"^/add_account$"))
-    async def add_account_handler(event):
-        if not is_authorized(event.sender_id):
-            await event.reply("⛔ You are not authorised.")
-            return
-        await handle_add_account_command(event)
-
-    # ── Dynamic message dispatcher ──
-
-    @bot.on(events.NewMessage)
-    async def message_dispatcher(event):
-        """Route all incoming text messages to the correct step handler."""
-        if not is_authorized(event.sender_id):
-            return
-        if not event.message.text:
-            return
-
-        uid = event.sender_id
-        txt = event.message.text.strip()
-
-        # ── Account login flows ──
-        from handlers.account_handlers import _login_flows
-        if uid in _login_flows:
-            step = _login_flows[uid].get("step")
-            if step == "awaiting_phone":
-                await handle_phone_input(event)
-                return
-            elif step == "awaiting_code":
-                await handle_code_input(event)
-                return
-            elif step == "awaiting_2fa":
-                await handle_2fa_input(event)
-                return
-            elif step == "awaiting_session":
-                await handle_session_string_input(event)
-                return
-
-        # ── Join flows ──
-        from handlers.join_handlers import _join_flows
-        if uid in _join_flows:
-            step = _join_flows[uid].get("step")
-            if step == "awaiting_link":
-                await handle_join_link(event)
-                return
-            elif step == "awaiting_online_count":
-                await handle_online_count(event)
-                return
-            elif step == "awaiting_offline_2min_count":
-                await handle_offline_2min_count(event)
-                return
-            elif step == "awaiting_last_seen_count":
-                await handle_last_seen_count(event)
-                return
-
-        # ── View Booster flow ──
-        from handlers.callback_handlers import _view_flows
-        if uid in _view_flows and _view_flows[uid].get("step") == "awaiting_link":
-            from utils.view_booster import run_view_boost
-            _view_flows[uid]["link"] = txt
-            _view_flows[uid]["step"] = "done"
-
-            status_msg = await event.reply("🔄 **View Booster**\n\nStarting view boost...")
-            try:
-                result = await run_view_boost(
-                    API_ID, API_HASH, txt,
-                    progress_callback=lambda i, t, s: None
-                )
-                await status_msg.edit(
-                    f"✅ **View Booster complete!**\n"
-                    f"Success: {result['success']} | Failed: {result['failed']}\n"
-                    f"Total accounts used: {result['total']}"
-                )
-            except Exception as e:
-                await status_msg.edit(f"❌ Error: {str(e)}")
-            finally:
-                if uid in _view_flows:
-                    del _view_flows[uid]
-            await event.reply("Use the buttons below to continue.", buttons=get_main_keyboard())
-            return
-
-        # ── Reaction flow ──
-        from handlers.callback_handlers import _reaction_flows
-        if uid in _reaction_flows and _reaction_flows[uid].get("step") == "awaiting_link":
-            _reaction_flows[uid]["link"] = txt
-            _reaction_flows[uid]["step"] = "awaiting_type"
-            from keyboards.reaction_keyboard import get_reaction_type_keyboard
-            await event.reply(
-                "❤️ **Select Reaction Type**\n\n"
-                "🎲 **Mix** — Random emoji on each account\n"
-                "👍 **Single** — Same emoji on all accounts",
-                buttons=get_reaction_type_keyboard()
-            )
-            return
-
-    # ── File upload handler (.session files) ──
-    @bot.on(events.NewMessage(func=lambda e: e.message.file and e.message.file.name and e.message.file.name.endswith(".session")))
-    async def session_file_handler(event):
-        if not is_authorized(event.sender_id):
-            await event.reply("⛔ You are not authorised.")
-            return
-        await handle_session_file_upload(event)
-
-    # ── Callback query handler ──
-    @bot.on(events.CallbackQuery)
-    async def callback_handler(event):
-        await handle_callback_query(event)
-
-    logger.info("Bot is ready. Listening for commands...")
-    await bot.run_until_disconnected()
+    await event.reply(
+        "🤖 **Telegram Account Manager Bot**\n\n"
+        "Welcome! I manage multiple Telegram accounts.\n"
+        "Use the buttons below or type commands.\n\n"
+        "📌 **Quick Start**\n"
+        "1. Click **➕ Add Account** to add your first account\n"
+        "2. Edit `data/name.txt` with names\n"
+        "3. Use **📋 Start Join** to join a channel\n"
+        "4. Use **👁️ View Booster** or **❤️ Reactions** on posts\n",
+        buttons=get_main_keyboard()
+    )
 
 
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user.")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+async def handle_help(event):
+    """Send detailed help message."""
+    if not is_authorized(event.sender_id):
+        await event.reply("⛔ You are not authorised.")
+        return
+
+    help_text = (
+        "❓ **Help — Bot Features**\n\n"
+        "**➕ Add Account**\n"
+        "Add accounts via Phone+OTP+2FA or session string/file.\n\n"
+        "**📋 Start Join**\n"
+        "Join a private channel/group with multiple accounts.\n"
+        "Set a timer gap between joins and randomly distribute online/offline status.\n\n"
+        "**📊 Stats**\n"
+        "View which accounts joined which channels, total accounts, and active count.\n\n"
+        "**👁️ View Booster**\n"
+        "Increase view count on a post using all accounts (3s fixed gap).\n\n"
+        "**❤️ Reactions**\n"
+        "Add reactions to a post — Mix (random emojis) or Single (specific emoji).\n\n"
+        "**💚 Health**\n"
+        "Check which accounts are working and their current status.\n\n"
+        "**Status Overrides**\n"
+        "• 🟢 All IDs → Online: Force all accounts online\n"
+        "• 🕒 All IDs → Last Seen Recently: Force all accounts to show 'last seen recently'\n\n"
+        "**Commands**\n"
+        "• `/remove(chatid)` — Remove all accounts from a specific chat\n"
+        "• `/start` — Show main menu\n\n"
+        "**Adding Accounts**\n"
+        "1. Click **➕ Add Account** button\n"
+        "2. Choose **Phone + OTP + 2FA** or **Session String / File**\n"
+        "3. Follow the prompts\n"
+        "4. The bot auto-assigns a name from `name.txt`\n\n"
+        "**name.txt**\n"
+        "Edit `data/name.txt` with one name per line.\n"
+        "The bot automatically assigns the next unused name when adding accounts."
+    )
+    await event.reply(help_text, buttons=get_main_keyboard())
+
+
+async def handle_remove(event):
+    """
+    /remove(chatid) — Remove all accounts from a specific chat.
+    Usage: /remove(-1001234567890)  or  /remove @channelusername
+    """
+    if not is_authorized(event.sender_id):
+        await event.reply("⛔ You are not authorised.")
+        return
+
+    text = event.message.text.strip()
+    match = re.search(r"/remove[\(\s]*(.+?)[\)\s]*$", text)
+    if not match:
+        await event.reply(
+            "❌ Usage: `/remove(chatid)` or `/remove @channelusername`\n"
+            "Example: `/remove(-1001234567890)`"
+        )
+        return
+
+    chat_identifier = match.group(1).strip()
+    await event.reply(f"🔄 Removing accounts from `{chat_identifier}`...")
+
+    accounts = load_accounts()
+    stats = load_stats()
+    removed_count = 0
+
+    # Local imports to avoid circular dependency
+    from utils.telegram_client import create_client
+    from telethon.tl.functions.channels import LeaveChannelRequest
+    from config import API_ID, API_HASH
+
+    for acc_id, acc_data in accounts.items():
+        joined_chats = stats.get(acc_id, [])
+        if chat_identifier not in joined_chats:
+            continue
+
+        session_name = acc_data.get("session", acc_id)
+        client = await create_client(session_name, API_ID, API_HASH)
+        try:
+            await client.connect()
+            if await client.is_user_authorized():
+                try:
+                    entity = await client.get_entity(chat_identifier)
+                    await client(LeaveChannelRequest(entity))
+                    removed_count += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            await client.disconnect()
+
+    for acc_id in stats:
+        if chat_identifier in stats[acc_id]:
+            stats[acc_id].remove(chat_identifier)
+    save_stats(stats)
+
+    await event.reply(
+        f"✅ Removed **{removed_count}** accounts from `{chat_identifier}`.\n"
+        f"Stats updated.",
+        buttons=get_main_keyboard()
+    )
