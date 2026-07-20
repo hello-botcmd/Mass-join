@@ -1,26 +1,27 @@
 import os
 
 # Your API credentials from my.telegram.org
-API_ID = 37927665          # <-- REPLACE WITH YOUR API_ID
-API_HASH = "6cc390ad7fdf473b9c5df526acfa18e0"  # <-- REPLACE WITH YOUR API_HASH
-BOT_TOKEN = "8886273263:AAHWQ3wWvNskeXoybSuc8X_Fod9IhiUwdrU"  # <-- REPLACE WITH YOUR BOT_TOKEN
+API_ID = 123456789          # <-- REPLACE
+API_HASH = "your_api_hash_here"  # <-- REPLACE
+BOT_TOKEN = "your_bot_token_here"  # <-- REPLACE
 
-# Owner Telegram User ID (numerical) — the bot's master
-OWNER_ID = 8694029886       # <-- REPLACE WITH YOUR OWNER ID
+# Owner Telegram User ID
+OWNER_ID = 1234567890       # <-- REPLACE
 
-# Additional sudo users who can operate the bot
+# Additional sudo users
 SUDO_USERS = [
-    8694029886,              # <-- REPLACE with actual sudo user IDs
-    8580367479,
+    1234567891,
+    1234567892,
 ]
+
+# ── MongoDB ──
+MONGO_URI = "mongodb://localhost:27017"   # or your MongoDB Atlas URI
+MONGO_DB_NAME = "telegram_account_bot"
 
 # System
 SESSION_DIR = "data/sessions"
-ACCOUNTS_FILE = "data/accounts.json"
-STATS_FILE = "data/stats.json"
-NAME_FILE = "data/name.txt"
 
-# Ensure data directories exist
+# Ensure session directory exists
 os.makedirs(SESSION_DIR, exist_ok=True)
 os.makedirs("data", exist_ok=True)
 
