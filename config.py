@@ -1,22 +1,20 @@
 import os
 
 # Your API credentials from my.telegram.org
-API_ID = 123456789          # <-- REPLACE
-API_HASH = "your_api_hash_here"  # <-- REPLACE
-BOT_TOKEN = "your_bot_token_here"  # <-- REPLACE
+API_ID = 37927665      # <-- REPLACE
+API_HASH = "6cc390ad7fdf473b9c5df526acfa18e0"  # <-- REPLACE
+BOT_TOKEN = "8886273263:AAHWQ3wWvNskeXoybSuc8X_Fod9IhiUwdrU"  # <-- REPLACE
 
 # Owner Telegram User ID
-OWNER_ID = 1234567890       # <-- REPLACE
+OWNER_ID = 8580367479   # <-- REPLACE
 
 # Additional sudo users
-SUDO_USERS = [
-    1234567891,
-    1234567892,
+SUDO_USERS = [8694029886
 ]
 
 # ── MongoDB ──
-MONGO_URI = "mongodb://localhost:27017"   # or your MongoDB Atlas URI
-MONGO_DB_NAME = "telegram_account_bot"
+MONGO_URI = "mongodb+srv://nexacoders2_db_user:dxYh7QOdHvH6OVdd@cluster0.f4qxcbk.mongodb.net/?appName=Cluster0"   # or your MongoDB Atlas URI
+MONGO_DB_NAME = "eryx"
 
 # System
 SESSION_DIR = "data/sessions"
