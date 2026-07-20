@@ -67,7 +67,6 @@ async def handle_help(event):
     )
     await event.reply(help_text, buttons=get_main_keyboard())
 
-
 async def handle_remove(event):
     """
     /remove(chatid) — Remove all accounts from a specific chat.
@@ -87,45 +86,61 @@ async def handle_remove(event):
         return
 
     chat_identifier = match.group(1).strip()
-    await event.reply(f"🔄 Removing accounts from `{chat_identifier}`...")
+    await event.reply(f"🔄 Removing all accounts from `{chat_identifier}`...")
 
-    accounts = load_accounts()
-    stats = load_stats()
-    removed_count = 0
-
-    # Local imports to avoid circular dependency
-    from utils.telegram_client import create_client
-    from telethon.tl.functions.channels import LeaveChannelRequest
+    from utils.database import get_all_accounts
+    from utils.telegram_client import create_client, leave_channel
+    from utils.stats_tracker import remove_chat_from_all_accounts
     from config import API_ID, API_HASH
 
-    for acc_id, acc_data in accounts.items():
-        joined_chats = stats.get(acc_id, [])
-        if chat_identifier not in joined_chats:
-            continue
+    accounts = get_all_accounts()
+    removed_count = 0
+    fail_count = 0
+    total = len(accounts)
 
+    progress_msg = await event.reply(f"🔄 Starting removal from `{chat_identifier}`... **0/{total}**")
+
+    for i, (acc_id, acc_data) in enumerate(accounts.items()):
+        session_string = acc_data.get("session_string", "")
         session_name = acc_data.get("session", acc_id)
-        client = await create_client(session_name, API_ID, API_HASH)
+        account_name = acc_data.get("name", acc_id)
+
+        client = await create_client(
+            session_string if session_string else session_name,
+            API_ID, API_HASH
+        )
+
         try:
             await client.connect()
             if await client.is_user_authorized():
-                try:
-                    entity = await client.get_entity(chat_identifier)
-                    await client(LeaveChannelRequest(entity))
+                result = await leave_channel(client, chat_identifier)
+                if result:
                     removed_count += 1
-                except Exception:
-                    pass
+                else:
+                    fail_count += 1
+            else:
+                fail_count += 1
         except Exception:
-            pass
+            fail_count += 1
         finally:
             await client.disconnect()
 
-    for acc_id in stats:
-        if chat_identifier in stats[acc_id]:
-            stats[acc_id].remove(chat_identifier)
-    save_stats(stats)
+        if (i + 1) % 5 == 0 or i == total - 1:
+            try:
+                await progress_msg.edit(
+                    f"🔄 Removing... **{i+1}/{total}**\n"
+                    f"✅ Left: {removed_count} | ❌ Failed: {fail_count}"
+                )
+            except Exception:
+                pass
 
-    await event.reply(
-        f"✅ Removed **{removed_count}** accounts from `{chat_identifier}`.\n"
-        f"Stats updated.",
-        buttons=get_main_keyboard()
+    # Clean up stats
+    remove_chat_from_all_accounts(chat_identifier)
+
+    await progress_msg.edit(
+        f"✅ **Removal complete!**\n"
+        f"Accounts removed: **{removed_count}**\n"
+        f"Failed: **{fail_count}**\n"
+        f"Chat: `{chat_identifier}`\n"
+        f"Stats cleaned up."
     )
