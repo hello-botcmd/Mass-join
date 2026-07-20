@@ -1,40 +1,49 @@
 import os
-import json
+from utils.database import (
+    get_all_accounts, save_account, get_all_used_names, mark_name_used, is_name_used
+)
 
-ACCOUNTS_FILE = "data/accounts.json"
 NAME_FILE = "data/name.txt"
 
 
 def load_accounts() -> dict:
-    if not os.path.exists(ACCOUNTS_FILE):
-        return {}
-    with open(ACCOUNTS_FILE, "r") as f:
-        return json.load(f)
+    """Returns {account_id: {name, phone, session, status}}"""
+    return get_all_accounts()
 
 
 def save_accounts(accounts: dict):
-    with open(ACCOUNTS_FILE, "w") as f:
-        json.dump(accounts, f, indent=2)
+    """Save all accounts. Note: we use save_account() per account for upserts."""
+    for acc_id, data in accounts.items():
+        save_account(acc_id, data)
 
 
 def get_used_names() -> set:
-    accounts = load_accounts()
-    return {a.get("name") for a in accounts.values() if a.get("name")}
+    """Get all names already assigned to accounts from DB."""
+    return get_all_used_names()
 
 
 def get_next_name() -> str:
     """
     Reads name.txt, returns the first line whose name is not yet used
-    in accounts.json. Marks it as used by returning it.
+    in MongoDB. Marks it as used.
     """
-    if not os.path.exists(NAME_FILE):
-        return f"User_{len(load_accounts()) + 1}"
-
     used = get_used_names()
+
+    if not os.path.exists(NAME_FILE):
+        count = len(load_accounts())
+        name = f"User_{count + 1}"
+        mark_name_used(name)
+        return name
+
     with open(NAME_FILE, "r") as f:
         for line in f:
             name = line.strip()
-            if name and name not in used:
+            if name and not is_name_used(name):
+                mark_name_used(name)
                 return name
+
     # Fallback if all names are used
-    return f"User_{len(load_accounts()) + 1}"
+    count = len(load_accounts())
+    name = f"User_{count + 1}"
+    mark_name_used(name)
+    return name
