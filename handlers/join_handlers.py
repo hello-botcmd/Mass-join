@@ -1,20 +1,19 @@
 import asyncio
 import random
 from telethon import events, Button
-from utils.telegram_client import create_client, join_private_channel, set_online, set_offline
-from utils.name_assigner import load_accounts, save_accounts
+from utils.telegram_client import create_client, join_private_channel, set_online, set_offline, change_account_name, get_session_string
+from utils.database import get_all_accounts, save_account, get_session_string as get_db_session
 from utils.stats_tracker import record_join
 from utils.status_manager import random_distribution, apply_status
 from config import API_ID, API_HASH
 
-# Store join flow state per user
 _join_flows = {}
 
 
 async def handle_start_join(event):
     """Start the join flow — ask for invite link."""
     user_id = event.sender_id
-    accounts = load_accounts()
+    accounts = get_all_accounts()
     if not accounts:
         await event.answer("❌ No accounts added yet. Add accounts first!", alert=True)
         return
@@ -60,10 +59,10 @@ async def handle_timer_selection(event):
     data = event.data.decode()
 
     gap_map = {
-        b"timer_1".decode(): 1,
-        b"timer_2".decode(): 2,
-        b"timer_5".decode(): 5,
-        b"timer_10".decode(): 10,
+        "timer_1": 1,
+        "timer_2": 2,
+        "timer_5": 5,
+        "timer_10": 10,
     }
     gap = gap_map.get(data, 2)
 
@@ -80,7 +79,8 @@ async def handle_timer_selection(event):
         "Now let's configure the **status distribution**.\n\n"
         f"Total accounts: **{total}**\n\n"
         "**How many accounts should remain fully online?**\n"
-        "Send a number (e.g., `20`)"
+        "Send a number (e.g., `20`)",
+        buttons=[[Button.inline("🔙 Cancel", b"cancel_join")]]
     )
 
 
@@ -110,7 +110,8 @@ async def handle_online_count(event):
     await event.reply(
         f"✅ **{count}** accounts will stay online.\n\n"
         f"**How many should go offline 2 minutes after joining?**\n"
-        f"Send a number (remaining: {remaining})"
+        f"Send a number (remaining: {remaining})",
+        buttons=[[Button.inline("🔙 Cancel", b"cancel_join")]]
     )
 
 
@@ -143,7 +144,8 @@ async def handle_offline_2min_count(event):
     await event.reply(
         f"✅ **{count}** accounts will go offline after 2 minutes.\n\n"
         f"**How many should show 'last seen recently'?**\n"
-        f"Send a number (remaining: {remaining2})"
+        f"Send a number (remaining: {remaining2})",
+        buttons=[[Button.inline("🔙 Cancel", b"cancel_join")]]
     )
 
 
@@ -166,13 +168,11 @@ async def handle_last_seen_count(event):
     remaining = total - used
 
     if count < 0 or count > remaining:
-        await event.reply(f"❌ Number must be between 0 and {remaining}. Using {remaining}.")
         count = remaining
 
     flow = _join_flows[user_id]
     flow["last_seen_count"] = count
 
-    # Randomly assign statuses
     status_map = random_distribution(
         flow["account_ids"],
         flow["online_count"],
@@ -180,7 +180,6 @@ async def handle_last_seen_count(event):
         flow["last_seen_count"]
     )
 
-    # Begin joining
     link = flow["link"]
     gap = flow["gap"]
 
@@ -193,7 +192,6 @@ async def handle_last_seen_count(event):
         f"🔄 Starting..."
     )
 
-    # Process accounts in shuffled order
     account_ids = flow["account_ids"].copy()
     random.shuffle(account_ids)
 
@@ -202,10 +200,17 @@ async def handle_last_seen_count(event):
 
     for i, account_id in enumerate(account_ids):
         account_data = flow["accounts"].get(account_id, {})
-        session_name = account_data.get("session", account_id)
         account_name = account_data.get("name", account_id)
 
-        client = await create_client(session_name, API_ID, API_HASH)
+        # Get session string from DB (accounts may have been updated)
+        session_string = get_db_session(account_id)
+        session_name = account_data.get("session", account_id)
+
+        client = await create_client(
+            session_string if session_string else session_name,
+            API_ID, API_HASH
+        )
+
         try:
             await client.connect()
             if not await client.is_user_authorized():
@@ -218,29 +223,45 @@ async def handle_last_seen_count(event):
                 await client.disconnect()
                 continue
 
-            # Join the channel
+            # ── STEP 1: Change the account's display name on Telegram ──
+            name_changed = await change_account_name(client, account_name)
+            if name_changed:
+                name_status = "name set ✓"
+            else:
+                name_status = "name failed"
+
+            # ── STEP 2: Join the channel ──
             joined = await join_private_channel(client, link)
+
             if joined:
                 success_count += 1
-                record_join(account_id, link)  # Use link as chat identifier
+                record_join(account_id, link)
+
+                # Save the session string after a successful join for future use
+                try:
+                    ss = await get_session_string(client)
+                    save_account(account_id, {**account_data, "session_string": ss})
+                except Exception:
+                    pass
 
                 # Apply status
                 status = status_map.get(account_id, "last_seen_recently")
                 await apply_status(client, status)
-
             else:
                 fail_count += 1
 
             await progress_msg.edit(
                 f"🚀 Joining... **{i+1}/{total}**\n"
                 f"✅ Success: {success_count} | ❌ Failed: {fail_count}\n"
-                f"➡️ {account_name} — {'✓ joined' if joined else '✗ failed'}"
+                f"➡️ {account_name} — {'✓ joined, ' + name_status if joined else '✗ failed'}"
             )
 
             # Handle offline_2min: schedule going offline after 2 minutes
-            if status == "offline_2min":
+            if joined and status_map.get(account_id) == "offline_2min":
                 asyncio.create_task(
-                    _delayed_set_offline(session_name, account_name, 120)
+                    _delayed_set_offline(
+                        account_id, account_data, account_name, 120
+                    )
                 )
 
         except Exception as e:
@@ -253,7 +274,6 @@ async def handle_last_seen_count(event):
         finally:
             await client.disconnect()
 
-        # Timer gap between joins
         if i < total - 1:
             await asyncio.sleep(gap)
 
@@ -267,10 +287,16 @@ async def handle_last_seen_count(event):
     del _join_flows[user_id]
 
 
-async def _delayed_set_offline(session_name: str, account_name: str, delay: int):
+async def _delayed_set_offline(account_id: str, account_data: dict, account_name: str, delay: int):
     """Set an account offline after a delay."""
     await asyncio.sleep(delay)
-    client = await create_client(session_name, API_ID, API_HASH)
+    session_string = get_db_session(account_id)
+    session_name = account_data.get("session", account_id)
+
+    client = await create_client(
+        session_string if session_string else session_name,
+        API_ID, API_HASH
+    )
     try:
         await client.connect()
         if await client.is_user_authorized():
