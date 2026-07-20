@@ -25,24 +25,40 @@ async def handle_callback_query(event):
         return
 
     data = event.data.decode()
-    print(f"[Callback] User {user_id}: {data}")
 
-    # ── Main Menu ──
+    # ── Main Menu Back ──
     if data == "back_main":
-        from keyboards.main_keyboard import get_main_keyboard
         await event.edit(
             "🏠 **Main Menu**\n\nSelect an option below:",
             buttons=get_main_keyboard()
         )
         return
 
+    # ── Add Account Menu ──
+    if data == "add_account_menu":
+        from handlers.account_handlers import handle_add_account_menu
+        await handle_add_account_menu(event)
+        return
+
+    if data == "add_by_phone":
+        from handlers.account_handlers import handle_add_by_phone
+        await handle_add_by_phone(event)
+        return
+
+    if data == "add_by_session":
+        from handlers.account_handlers import handle_add_by_session
+        await handle_add_by_session(event)
+        return
+
     # ── Help ──
     if data == "help":
         help_text = (
             "❓ **Help — Bot Features**\n\n"
+            "**➕ Add Account**\n"
+            "Add accounts via Phone+OTP+2FA or session string/file.\n\n"
             "**📋 Start Join**\n"
             "Join a private channel/group with multiple accounts.\n"
-            "You can set a timer gap between joins and randomly distribute online/offline status.\n\n"
+            "Set timer gap between joins and randomly distribute online/offline status.\n\n"
             "**📊 Stats**\n"
             "View which accounts joined which channels, total accounts, and active count.\n\n"
             "**👁️ View Booster**\n"
@@ -55,13 +71,12 @@ async def handle_callback_query(event):
             "• 🟢 All IDs → Online: Force all accounts online\n"
             "• 🕒 All IDs → Last Seen Recently: Force all accounts to show 'last seen recently'\n\n"
             "**Commands**\n"
-            "• `/add_account` — Add a new Telegram account\n"
             "• `/remove(chatid)` — Remove all accounts from a specific chat\n"
             "• `/start` — Show main menu\n\n"
             "**Adding Accounts**\n"
-            "1. Send `/add_account`\n"
-            "2. Provide phone number or upload `.session` file\n"
-            "3. Enter OTP code + 2FA password if needed\n"
+            "1. Click **➕ Add Account** button\n"
+            "2. Choose **Phone + OTP + 2FA** or **Session String / File**\n"
+            "3. Follow the prompts\n"
             "4. The bot auto-assigns a name from `name.txt`\n\n"
             "**name.txt**\n"
             "Edit `data/name.txt` with one name per line.\n"
@@ -76,7 +91,6 @@ async def handle_callback_query(event):
         stats_data = load_stats()
         total = len(accounts)
 
-        # Count active accounts (those with sessions that authorize)
         active_count = 0
         for acc_id, acc_data in accounts.items():
             session_name = acc_data.get("session", acc_id)
@@ -90,7 +104,6 @@ async def handle_callback_query(event):
             finally:
                 await client.disconnect()
 
-        # Build per-account channel list
         lines = [f"📊 **Stats**\n", f"Total accounts: **{total}**\nActive: **{active_count}**\n"]
         for acc_id, acc_data in accounts.items():
             name = acc_data.get("name", acc_id)
@@ -104,7 +117,6 @@ async def handle_callback_query(event):
                 lines.append(f"\n**{name}** (ID: `{acc_id}`): No joins yet")
 
         text = "\n".join(lines)
-        # Split if too long
         if len(text) > 3500:
             text = text[:3500] + "\n\n... (truncated)"
 
@@ -213,7 +225,7 @@ async def handle_callback_query(event):
             try:
                 await client.connect()
                 if await client.is_user_authorized():
-                    await set_offline(client)  # offline triggers "last seen recently"
+                    await set_offline(client)
                     success += 1
                 else:
                     fail += 1
@@ -229,7 +241,7 @@ async def handle_callback_query(event):
         return
 
     # ── Reaction Type Selection ──
-    if data == "react_mix" or data == "react_single":
+    if data in ("react_mix", "react_single"):
         mode = "mix" if data == "react_mix" else "single"
         flow = _reaction_flows.get(user_id)
         if not flow or "link" not in flow:
@@ -243,7 +255,7 @@ async def handle_callback_query(event):
         result = await run_reactions(
             API_ID, API_HASH, link, mode,
             single_emoji="👍",
-            progress_callback=lambda i, t, s: None  # simplified
+            progress_callback=lambda i, t, s: None
         )
 
         await event.edit(
@@ -258,37 +270,8 @@ async def handle_callback_query(event):
 
     # ── Timer Selection (from join flow) ──
     if data.startswith("timer_"):
-        # Import here to avoid circular imports
         from handlers.join_handlers import handle_timer_selection
         await handle_timer_selection(event)
-        return
-
-    # ── Cancel flows ──
-    if data == "cancel_join":
-        if user_id in _reaction_flows:
-            del _reaction_flows[user_id]
-        from keyboards.main_keyboard import get_main_keyboard
-        await event.edit("❌ Join cancelled.", buttons=get_main_keyboard())
-        return
-
-    if data == "cancel_view":
-        if user_id in _view_flows:
-            del _view_flows[user_id]
-        from keyboards.main_keyboard import get_main_keyboard
-        await event.edit("❌ View booster cancelled.", buttons=get_main_keyboard())
-        return
-
-    if data == "cancel_reaction":
-        if user_id in _reaction_flows:
-            del _reaction_flows[user_id]
-        from keyboards.main_keyboard import get_main_keyboard
-        await event.edit("❌ Reactions cancelled.", buttons=get_main_keyboard())
-        return
-
-    if data == "cancel_login":
-        if user_id in _login_flows_global:
-            del _login_flows_global[user_id]
-        await event.edit("❌ Login cancelled.", buttons=get_main_keyboard())
         return
 
     # ── Start Join (from main menu) ──
@@ -297,16 +280,28 @@ async def handle_callback_query(event):
         await handle_start_join(event)
         return
 
-    # ── Upload session ──
-    if data == "upload_session":
-        await event.edit(
-            "📤 **Upload .session file**\n\n"
-            "Send me your `.session` file directly.\n"
-            "The bot will save it and register the account.",
-            buttons=[[Button.inline("🔙 Cancel", b"cancel_login")]]
-        )
+    # ── Cancel flows ──
+    if data == "cancel_join":
+        if user_id in _reaction_flows:
+            del _reaction_flows[user_id]
+        await event.edit("❌ Join cancelled.", buttons=get_main_keyboard())
         return
 
+    if data == "cancel_view":
+        if user_id in _view_flows:
+            del _view_flows[user_id]
+        await event.edit("❌ View booster cancelled.", buttons=get_main_keyboard())
+        return
 
-# Store reference to login flows for cancel
-_login_flows_global = {}
+    if data == "cancel_reaction":
+        if user_id in _reaction_flows:
+            del _reaction_flows[user_id]
+        await event.edit("❌ Reactions cancelled.", buttons=get_main_keyboard())
+        return
+
+    if data == "cancel_login":
+        from handlers.account_handlers import _login_flows
+        if user_id in _login_flows:
+            del _login_flows[user_id]
+        await event.edit("❌ Login cancelled.", buttons=get_main_keyboard())
+        return
