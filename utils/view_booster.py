@@ -1,6 +1,6 @@
 import asyncio
 import re
-from utils.telegram_client import create_client, boost_views
+from utils.telegram_client import create_client, boost_views, resolve_channel_entity
 from utils.database import get_all_accounts, get_session_string
 from config import API_ID, API_HASH, VIEW_GAP
 
@@ -30,7 +30,6 @@ async def run_view_boost(api_id: int, api_hash: str, post_link: str, progress_ca
 
     for account_id, account_data in accounts.items():
         idx += 1
-        # Use session string if available, otherwise session file name
         session_string = account_data.get("session_string", "")
         session_name = account_data.get("session", account_id)
 
@@ -48,13 +47,14 @@ async def run_view_boost(api_id: int, api_hash: str, post_link: str, progress_ca
                 await client.disconnect()
                 continue
 
-            try:
-                if channel_identifier.startswith("-100"):
-                    entity = await client.get_entity(int(channel_identifier))
-                else:
-                    entity = await client.get_entity(channel_identifier)
-            except Exception:
-                entity = await client.get_entity(int(channel_identifier))
+            # Resolve the channel entity using the robust method
+            entity = await resolve_channel_entity(client, channel_identifier)
+            if entity is None:
+                results["failed"] += 1
+                if progress_callback:
+                    await progress_callback(idx, len(accounts), f"{account_data.get('name', account_id)} — channel not found")
+                await client.disconnect()
+                continue
 
             success = await boost_views(client, entity, msg_id)
             if success:
