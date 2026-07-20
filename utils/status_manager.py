@@ -1,6 +1,8 @@
 import random
 import asyncio
-from utils.telegram_client import create_client, set_online, set_offline
+from utils.database import get_session_string
+from utils.telegram_client import create_client, set_online, set_offline, change_account_name
+from config import API_ID, API_HASH
 
 
 def random_distribution(account_ids: list, online_count: int, offline_2min_count: int, last_seen_count: int):
@@ -31,7 +33,6 @@ def random_distribution(account_ids: list, online_count: int, offline_2min_count
         status_map[shuffled[idx]] = "last_seen_recently"
         idx += 1
 
-    # Any remaining accounts default to "last_seen_recently"
     while idx < len(shuffled):
         status_map[shuffled[idx]] = "last_seen_recently"
         idx += 1
@@ -42,12 +43,12 @@ def random_distribution(account_ids: list, online_count: int, offline_2min_count
 async def apply_status(client, status: str):
     """
     Apply a status to a client.
-    - "online": set online
-    - "offline_2min": set offline (triggers 'last seen X time ago')
-    - "last_seen_recently": do nothing special (Telegram auto-manages this)
+    - "online": set online (green circle)
+    - "offline_2min": set offline (shows 'last seen recently' then exact time)
+    - "last_seen_recently": set offline (shows 'last seen recently')
     """
     if status == "online":
-        await set_online(client)
-    elif status == "offline_2min":
-        await set_offline(client)
-    # "last_seen_recently" — leave as default
+        return await set_online(client)
+    else:
+        # Both offline_2min and last_seen_recently → go offline
+        return await set_offline(client)
