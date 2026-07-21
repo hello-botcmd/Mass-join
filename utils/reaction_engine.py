@@ -1,8 +1,9 @@
 import asyncio
 import random
-import re
-from utils.telegram_client import create_client, send_reaction, resolve_channel_entity
-from utils.database import get_all_accounts, get_session_string
+from utils.telegram_client import (
+    create_client, send_reaction, resolve_channel_entity, parse_post_link
+)
+from utils.database import get_all_accounts
 from config import API_ID, API_HASH
 
 MIX_EMOJIS = ["👍", "❤️", "🔥", "🎉", "😁", "🤩", "👏", "💯", "🎊", "✨"]
@@ -10,28 +11,26 @@ SINGLE_EMOJI = "👍"
 REACTION_GAP = 3
 
 
-def parse_post_link(link: str):
-    link = link.strip()
-    pattern = r"(?:https?://)?t\.me/(?:c/)?([^/\s?]+)/(\d+)"
-    match = re.search(pattern, link)
-    if not match:
-        raise ValueError("Invalid Telegram post link format.")
-    channel_part = match.group(1)
-    msg_id = int(match.group(2))
-    if channel_part.isdigit():
-        return f"-100{channel_part}", msg_id
-    else:
-        return channel_part, msg_id
-
-
 async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
                         single_emoji: str = None, progress_callback=None):
+    """
+    Add reactions to a post using all stored accounts.
+    mode: "mix" for random emoji per account, "single" for one fixed emoji.
+    Progress callback signature: async func(index, total, status_message)
+    """
     accounts = get_all_accounts()
     if not accounts:
         raise Exception("No accounts available.")
 
     channel_identifier, msg_id = parse_post_link(post_link)
-    results = {"success": 0, "failed": 0, "total": len(accounts)}
+    results = {
+        "success": 0,
+        "failed": 0,
+        "not_member": 0,
+        "flood_wait": 0,
+        "errors": [],
+        "total": len(accounts)
+    }
     idx = 0
 
     for account_id, account_data in accounts.items():
@@ -49,39 +48,57 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
             await client.connect()
             if not await client.is_user_authorized():
                 results["failed"] += 1
+                msg = f"{account_name} — not authorized"
+                results["errors"].append(msg)
                 if progress_callback:
-                    await progress_callback(idx, len(accounts), f"{account_name} — not authorized")
+                    await progress_callback(idx, len(accounts), f"❌ {msg}")
                 await client.disconnect()
                 continue
 
-            # Resolve channel entity using robust method
-            entity = await resolve_channel_entity(client, channel_identifier)
+            # Resolve the channel entity
+            entity, error = await resolve_channel_entity(client, channel_identifier)
             if entity is None:
                 results["failed"] += 1
+                results["not_member"] += 1
+                msg = f"{account_name} — {error}"
+                results["errors"].append(msg)
                 if progress_callback:
-                    await progress_callback(idx, len(accounts), f"{account_name} — channel not found (not joined?)")
+                    await progress_callback(idx, len(accounts), f"❌ {msg}")
                 await client.disconnect()
                 continue
 
+            # Pick emoji based on mode
             if mode == "mix":
                 emoji = random.choice(MIX_EMOJIS)
             else:
                 emoji = single_emoji or SINGLE_EMOJI
 
-            success = await send_reaction(client, entity, msg_id, emoji)
+            # Send reaction
+            success, error_msg = await send_reaction(client, entity, msg_id, emoji)
             if success:
                 results["success"] += 1
+                if progress_callback:
+                    await progress_callback(idx, len(accounts), f"✅ {account_name} — {emoji}")
             else:
                 results["failed"] += 1
-
-            if progress_callback:
-                status = f"✓ {emoji}" if success else "✗"
-                await progress_callback(idx, len(accounts), f"{account_name} {status}")
+                if "FLOOD_WAIT" in (error_msg or "").upper():
+                    results["flood_wait"] += 1
+                    msg = f"{account_name} — flood wait"
+                elif "not a member" in (error_msg or "").lower():
+                    results["not_member"] += 1
+                    msg = f"{account_name} — not a member"
+                else:
+                    msg = f"{account_name} — {error_msg[:40]}"
+                    results["errors"].append(f"{account_name}: {error_msg}")
+                if progress_callback:
+                    await progress_callback(idx, len(accounts), f"❌ {msg}")
 
         except Exception as e:
             results["failed"] += 1
+            msg = f"{account_name} — error: {str(e)[:40]}"
+            results["errors"].append(msg)
             if progress_callback:
-                await progress_callback(idx, len(accounts), f"{account_name} ✗ {str(e)[:30]}")
+                await progress_callback(idx, len(accounts), f"❌ {msg}")
         finally:
             await client.disconnect()
 
