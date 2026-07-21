@@ -119,43 +119,54 @@ async def main():
                 return
 
         # ── View Booster flow ──
+        # ── View Booster flow ──
         from handlers.callback_handlers import _view_flows
         if uid in _view_flows and _view_flows[uid].get("step") == "awaiting_link":
             from utils.view_booster import run_view_boost
             _view_flows[uid]["link"] = txt
             _view_flows[uid]["step"] = "done"
 
-            status_msg = await event.reply("🔄 **View Booster**\n\nStarting view boost...")
+            status_msg = await event.reply(
+                "👁️ **View Booster**\n\n"
+                "Starting view boost. This may take a while..."
+            )
+
             try:
+                async def view_progress(idx, total, status):
+                    try:
+                        await status_msg.edit(
+                            f"👁️ View Booster... **{idx}/{total}**\n"
+                            f"Status: {status}"
+                        )
+                    except Exception:
+                        pass
+
                 result = await run_view_boost(
                     API_ID, API_HASH, txt,
-                    progress_callback=lambda i, t, s: None
+                    progress_callback=view_progress
                 )
+
+                summary_parts = [
+                    f"✅ **View Booster complete!**\n",
+                    f"✅ Views boosted: {result['success']}",
+                    f"❌ Failed: {result['failed']}",
+                ]
+                if result.get('not_member'):
+                    summary_parts.append(f"👤 Not channel member: {result['not_member']}")
+                if result.get('flood_wait'):
+                    summary_parts.append(f"⏳ Flood wait: {result['flood_wait']}")
+                summary_parts.append(f"\n📊 Total accounts: {result['total']}")
+
                 await status_msg.edit(
-                    f"✅ **View Booster complete!**\n"
-                    f"Success: {result['success']} | Failed: {result['failed']}\n"
-                    f"Total accounts used: {result['total']}"
+                    "\n".join(summary_parts)
                 )
+
             except Exception as e:
                 await status_msg.edit(f"❌ Error: {str(e)}")
             finally:
                 if uid in _view_flows:
                     del _view_flows[uid]
             await event.reply("Use the buttons below to continue.", buttons=get_main_keyboard())
-            return
-
-        # ── Reaction flow ──
-        from handlers.callback_handlers import _reaction_flows
-        if uid in _reaction_flows and _reaction_flows[uid].get("step") == "awaiting_link":
-            _reaction_flows[uid]["link"] = txt
-            _reaction_flows[uid]["step"] = "awaiting_type"
-            from keyboards.reaction_keyboard import get_reaction_type_keyboard
-            await event.reply(
-                "❤️ **Select Reaction Type**\n\n"
-                "🎲 **Mix** — Random emoji on each account\n"
-                "👍 **Single** — Same emoji on all accounts",
-                buttons=get_reaction_type_keyboard()
-            )
             return
 
     # ── File upload handler (.session files) ──
