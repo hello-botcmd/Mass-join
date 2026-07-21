@@ -130,21 +130,29 @@ async def handle_callback_query(event):
         return
 
     # ── View Booster ──
+    # ── View Booster ──
     if data == "view_booster":
         _view_flows[user_id] = {"step": "awaiting_link"}
         await event.edit(
             "👁️ **View Booster**\n\n"
+            "**IMPORTANT:** All accounts must have already joined the channel "
+            "before boosting views.\n\n"
             "Please send the **post link** you want to boost views on.\n\n"
-            "Format: `https://t.me/c/1234567890/123` or `https://t.me/channelname/123`",
+            "Format: `https://t.me/c/1234567890/123` or `https://t.me/channelname/123`\n\n"
+            "⚠️ **Note:** Telegram only allows view increment **once per account per day** "
+            "per message. Running this multiple times on the same post won't increase views further.",
             buttons=[[Button.inline("🔙 Cancel", b"cancel_view")]]
         )
         return
 
     # ── Reactions ──
+    # ── Reactions ──
     if data == "reactions":
         _reaction_flows[user_id] = {"step": "awaiting_link"}
         await event.edit(
             "❤️ **Reactions**\n\n"
+            "**IMPORTANT:** All accounts must have already joined the channel "
+            "before adding reactions.\n\n"
             "Please send the **post link** you want to add reactions to.\n\n"
             "Format: `https://t.me/c/1234567890/123` or `https://t.me/channelname/123`",
             buttons=[[Button.inline("🔙 Cancel", b"cancel_reaction")]]
@@ -291,6 +299,7 @@ async def handle_callback_query(event):
         return
 
     # ── Reaction Type Selection ──
+    # ── Reaction Type Selection ──
     if data in ("react_mix", "react_single"):
         mode = "mix" if data == "react_mix" else "single"
         flow = _reaction_flows.get(user_id)
@@ -299,19 +308,37 @@ async def handle_callback_query(event):
             return
 
         link = flow["link"]
-        await event.edit(f"🔄 Adding **{mode}** reactions to the post...")
+        progress_msg = await event.edit(f"🔄 Adding **{mode}** reactions to the post...\n\nStarting...")
 
         from utils.reaction_engine import run_reactions
+
+        async def progress_callback(idx, total, status):
+            try:
+                await progress_msg.edit(
+                    f"🔄 Adding reactions... **{idx}/{total}**\n"
+                    f"Last: {status}"
+                )
+            except Exception:
+                pass
+
         result = await run_reactions(
             API_ID, API_HASH, link, mode,
             single_emoji="👍",
-            progress_callback=lambda i, t, s: None
+            progress_callback=progress_callback
         )
 
-        await event.edit(
-            f"✅ **Reactions complete!**\n"
-            f"Mode: {mode}\n"
-            f"Success: {result['success']} | Failed: {result['failed']}",
+        summary_parts = [
+            f"✅ **Reactions complete!**\n",
+            f"✅ Success: {result['success']}",
+            f"❌ Failed: {result['failed']}",
+        ]
+        if result.get('not_member'):
+            summary_parts.append(f"👤 Not channel member: {result['not_member']}")
+        if result.get('flood_wait'):
+            summary_parts.append(f"⏳ Flood wait: {result['flood_wait']}")
+
+        await progress_msg.edit(
+            "\n".join(summary_parts),
             buttons=[[Button.inline("🔙 Back", b"back_main")]]
         )
         if user_id in _reaction_flows:
