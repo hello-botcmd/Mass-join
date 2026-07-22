@@ -13,11 +13,6 @@ REACTION_GAP = 3
 
 async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
                         single_emoji: str = None, progress_callback=None):
-    """
-    Add reactions to a post using all stored accounts.
-    mode: "mix" for random emoji per account, "single" for one fixed emoji.
-    Progress callback signature: async func(index, total, status_message)
-    """
     accounts = get_all_accounts()
     if not accounts:
         raise Exception("No accounts available.")
@@ -55,7 +50,6 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
                 await client.disconnect()
                 continue
 
-            # Resolve the channel entity
             entity, error = await resolve_channel_entity(client, channel_identifier)
             if entity is None:
                 results["failed"] += 1
@@ -67,13 +61,11 @@ async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
                 await client.disconnect()
                 continue
 
-            # Pick emoji based on mode
             if mode == "mix":
                 emoji = random.choice(MIX_EMOJIS)
             else:
                 emoji = single_emoji or SINGLE_EMOJI
 
-            # Send reaction
             success, error_msg = await send_reaction(client, entity, msg_id, emoji)
             if success:
                 results["success"] += 1
