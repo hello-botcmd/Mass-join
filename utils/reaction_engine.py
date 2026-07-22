@@ -1,99 +1,82 @@
-import asyncio
-import random
-from utils.telegram_client import (
-    create_client, send_reaction, resolve_channel_entity, parse_post_link
-)
-from utils.database import get_all_accounts
-from config import API_ID, API_HASH
+from telethon import events, Button
+from keyboards.reaction_keyboard import get_reaction_type_keyboard
+from utils.reaction_engine import run_reactions
 
-MIX_EMOJIS = ["👍", "❤️", "🔥", "🎉", "😁", "🤩", "👏", "💯", "🎊", "✨"]
-SINGLE_EMOJI = "👍"
-REACTION_GAP = 3
+user_states = {}
 
+def save_user_data(user_id, data):
+    if user_id not in user_states:
+        user_states[user_id] = {}
+    user_states[user_id].update(data)
 
-async def run_reactions(api_id: int, api_hash: str, post_link: str, mode: str,
-                        single_emoji: str = None, progress_callback=None):
-    accounts = get_all_accounts()
-    if not accounts:
-        raise Exception("No accounts available.")
+def get_user_data(user_id):
+    return user_states.get(user_id, {})
 
-    channel_identifier, msg_id = parse_post_link(post_link)
-    results = {
-        "success": 0,
-        "failed": 0,
-        "not_member": 0,
-        "flood_wait": 0,
-        "errors": [],
-        "total": len(accounts)
-    }
-    idx = 0
+@client.on(events.CallbackQuery(pattern=b"react_mix"))
+async def react_mix_handler(event):
+    await event.answer("Mix Reactions Selected")
+    save_user_data(event.sender_id, {"reaction_mode": "mix", "reaction_emoji": None})
+    await event.edit("Now send the Telegram post link:", buttons=Button.force_reply())
 
-    for account_id, account_data in accounts.items():
-        idx += 1
-        session_string = account_data.get("session_string", "")
-        session_name = account_data.get("session", account_id)
-        account_name = account_data.get("name", account_id)
+@client.on(events.CallbackQuery(pattern=b"react_single"))
+async def react_single_handler(event):
+    await event.answer("Single Reaction Selected")
+    save_user_data(event.sender_id, {"reaction_mode": "single", "reaction_emoji": None})
+    await event.edit("Select an emoji:", buttons=[
+        [Button.inline("👍", b"set_emoji_👍"), Button.inline("❤️", b"set_emoji_❤️")],
+        [Button.inline("🔥", b"set_emoji_🔥"), Button.inline("🎉", b"set_emoji_🎉")],
+        [Button.inline("Custom Emoji", b"set_emoji_custom")],
+        [Button.inline("🔙 Back", b"back_to_reaction_type")]
+    ])
 
-        client = await create_client(
-            session_string if session_string else session_name,
-            api_id, api_hash
-        )
+@client.on(events.CallbackQuery(pattern=b"set_emoji_(.+)"))
+async def set_emoji_handler(event):
+    emoji = event.pattern_match.group(1).decode('utf-8')
+    save_user_data(event.sender_id, {"reaction_emoji": emoji})
+    await event.answer(f"Emoji set: {emoji}")
+    await event.edit(f"Emoji selected: {emoji}\n\nNow send the post link:", buttons=Button.force_reply())
 
+@client.on(events.CallbackQuery(pattern=b"back_to_reaction_type"))
+async def back_to_reaction_type(event):
+    await event.edit("Choose reaction type:", buttons=get_reaction_type_keyboard())
+
+@client.on(events.NewMessage(pattern=r'https?://t\.me/'))
+async def post_link_handler(event):
+    user_id = event.sender_id
+    post_link = event.text.strip()
+    user_data = get_user_data(user_id)
+    mode = user_data.get("reaction_mode")
+    single_emoji = user_data.get("reaction_emoji")
+
+    if not mode:
+        await event.reply("Please select Mix or Single first.")
+        return
+
+    await event.reply(f"Starting reactions...\nMode: {mode.upper()}")
+
+    async def progress_callback(idx, total, status):
         try:
-            await client.connect()
-            if not await client.is_user_authorized():
-                results["failed"] += 1
-                msg = f"{account_name} — not authorized"
-                results["errors"].append(msg)
-                if progress_callback:
-                    await progress_callback(idx, len(accounts), f"❌ {msg}")
-                await client.disconnect()
-                continue
+            await event.reply(f"[{idx}/{total}] {status}")
+        except:
+            pass
 
-            entity, error = await resolve_channel_entity(client, channel_identifier)
-            if entity is None:
-                results["failed"] += 1
-                results["not_member"] += 1
-                msg = f"{account_name} — {error}"
-                results["errors"].append(msg)
-                if progress_callback:
-                    await progress_callback(idx, len(accounts), f"❌ {msg}")
-                await client.disconnect()
-                continue
-
-            if mode == "mix":
-                emoji = random.choice(MIX_EMOJIS)
-            else:
-                emoji = single_emoji or SINGLE_EMOJI
-
-            success, error_msg = await send_reaction(client, entity, msg_id, emoji)
-            if success:
-                results["success"] += 1
-                if progress_callback:
-                    await progress_callback(idx, len(accounts), f"✅ {account_name} — {emoji}")
-            else:
-                results["failed"] += 1
-                if "FLOOD_WAIT" in (error_msg or "").upper():
-                    results["flood_wait"] += 1
-                    msg = f"{account_name} — flood wait"
-                elif "not a member" in (error_msg or "").lower():
-                    results["not_member"] += 1
-                    msg = f"{account_name} — not a member"
-                else:
-                    msg = f"{account_name} — {error_msg[:40]}"
-                    results["errors"].append(f"{account_name}: {error_msg}")
-                if progress_callback:
-                    await progress_callback(idx, len(accounts), f"❌ {msg}")
-
-        except Exception as e:
-            results["failed"] += 1
-            msg = f"{account_name} — error: {str(e)[:40]}"
-            results["errors"].append(msg)
-            if progress_callback:
-                await progress_callback(idx, len(accounts), f"❌ {msg}")
-        finally:
-            await client.disconnect()
-
-        await asyncio.sleep(REACTION_GAP)
-
-    return results
+    try:
+        results = await run_reactions(
+            api_id=API_ID,
+            api_hash=API_HASH,
+            post_link=post_link,
+            mode=mode,
+            single_emoji=single_emoji,
+            progress_callback=progress_callback
+        )
+        summary = f"""
+Reaction Task Completed
+Total: {results['total']}
+Success: {results['success']}
+Failed: {results['failed']}
+Not Member: {results['not_member']}
+Flood: {results['flood_wait']}
+"""
+        await event.reply(summary)
+    except Exception as e:
+        await event.reply(f"Error: {str(e)}")
