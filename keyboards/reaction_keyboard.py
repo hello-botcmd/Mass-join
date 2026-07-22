@@ -1,6 +1,4 @@
 from telethon import Button
-
-
 def get_reaction_type_keyboard():
     buttons = [
         [Button.inline("🎲 Mix Reactions", b"react_mix")],
